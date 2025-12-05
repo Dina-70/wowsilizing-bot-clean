@@ -1,30 +1,14 @@
-FROM python:3.11-slim
-
-# Install ffmpeg for video processing
+# Установка FFmpeg и wget
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+    ffmpeg \
+    wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
-WORKDIR /app
+# Установка yt-dlp
+RUN wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp && \
+    chmod +x /usr/local/bin/yt-dlp
 
-# Copy requirements first for better caching
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application files
-COPY bot.py .
-COPY config.py .
-COPY database.py .
-COPY ai_processor.py .
-COPY video_processor.py .
-COPY utils.py .
-
-# Create directory for temporary files
-RUN mkdir -p /app/temp
-
-# Run the bot
-CMD ["python", "bot.py"]
+# Проверка установки
+RUN ffmpeg -version && ffprobe -version && yt-dlp --version
