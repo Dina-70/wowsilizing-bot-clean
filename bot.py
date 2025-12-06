@@ -10,7 +10,7 @@ from config import BOT_TOKEN, ADMIN_ID
 from database import Database
 from ai_processor import AIProcessor
 from video_processor import VideoProcessor
-from utils import setup_logging
+from utils import setup_logging, download_large_file, format_file_size
 
 # Setup logging
 setup_logging()
@@ -37,16 +37,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle video messages"""
+    video_path = None
     try:
         user_id = update.effective_user.id
+        video = update.message.video
         
-        # Send processing message
-        processing_msg = await update.message.reply_text("⏳ Обрабатываю видео...")
+        if not video:
+            await update.message.reply_text("❌ Не удалось получить информацию о видео.")
+            return
         
-        # Download video
-        video_file = await update.message.video.get_file()
-        video_path = f"temp_{user_id}_{video_file.file_id}.mp4"
-        await video_file.download_to_drive(video_path)
+        # Get video file info
+        file_id = video.file_id
+        file_size = video.file_size
+        file_name = video.file_name or f"video_{file_id}.mp4"
+        
+        # Check file size limit (2 GB)
+        max_size_bytes = 2 * 1024 * 1024 * 1024  # 2 GB
+        if file_size > max_size_bytes:
+            size_gb = file_size / (1024 * 1024 * 1024)
+            await update.message.reply_text(
+                f"❌ Файл слишком большой ({size_gb:.2f} ГБ).\n"
+                f"Максимальный размер: 2 ГБ"
+            )
+            return
+        
+        # Send processing message with file info
+        file_size_str = format_file_size(file_size)
+        processing_msg = await update.message.reply_text(
+            f"⏳ Загружаю видео...\n"
+            f"📦 Размер: {file_size_str}"
+        )
+        
+        # Download video using new method for large files
+        video_path = f"temp_{user_id}_{file_id}.mp4"
+        
+        # Try to download the video
+        success, error_msg = await download_large_file(file_id, file_size, video_path)
+        
+        if not success:
+            await processing_msg.edit_text(error_msg)
+            return
+        
+        # Update status
+        await processing_msg.edit_text(
+            f"✅ Видео загружено!\n"
+            f"⏳ Обрабатываю видео..."
+        )
         
         # Process video
         result = await video_processor.process_video(video_path)
@@ -59,15 +95,26 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Видео обработано!\n\n{analysis}"
         )
         
-        # Clean up
-        os.remove(video_path)
-        
         # Log to database
         db.log_video_processing(user_id)
         
     except Exception as e:
-        logger.error(f"Error processing video: {e}")
-        await update.message.reply_text("❌ Произошла ошибка при обработке видео.")
+        logger.error(f"Ошибка обработки видео: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(
+                "❌ Произошла ошибка при обработке видео.\n"
+                "Пожалуйста, попробуйте ещё раз позже."
+            )
+        except:
+            pass
+    finally:
+        # Clean up: remove temporary file
+        if video_path and os.path.exists(video_path):
+            try:
+                os.remove(video_path)
+                logger.info(f"Temporary file removed: {video_path}")
+            except Exception as e:
+                logger.error(f"Failed to remove temporary file: {e}")
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
